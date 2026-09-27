@@ -87,6 +87,7 @@ import { ModerationStore } from "../verification/moderation";
 import { createActivityRouter } from "./routes/activity";
 import { createReconciliationRouter } from "../reconciliation/routes";
 import type { ReconciliationQueryStore } from "../reconciliation/stores";
+import { parseStellarAddress, sendValidationError } from "./validation";
 
 // ── Auth middleware (BE-25) ───────────────────────────────────────────────────
 
@@ -335,6 +336,28 @@ export function createApp(db: Database, options: AppOptions = {}): express.Appli
 // We keep this comment for historical context but the actual middleware application
 // happens in the options passed to createApp.
 // app.use("/api", authMiddleware);
+
+  // ── Security-sensitive header guard (issue #665) ────────────────────────────
+  // `x-stellar-address` is a client-supplied identity hint that the address
+  // rate limiter keys on (see middleware/address-rate-limit.ts). A malformed
+  // value is silently ignored there and falls back to IP limiting, which means
+  // a client can quietly avoid per-address accounting by sending garbage. The
+  // header is an explicitly treated, security-sensitive field, so it is
+  // rejected here — once, for every public endpoint — rather than being
+  // tolerated by one layer and ignored by another.
+  apiRouter.use((req: Request, res: Response, next: NextFunction): void => {
+    const header = req.headers["x-stellar-address"];
+    if (header === undefined) {
+      next();
+      return;
+    }
+    const parsed = parseStellarAddress(header, "x-stellar-address");
+    if (!parsed.ok) {
+      sendValidationError(res, parsed.issue);
+      return;
+    }
+    next();
+  });
 
   apiRouter.use("/profiles", createProfilesRouter(db));
   apiRouter.use("/posts", createPostsRouter(db));

@@ -3,6 +3,12 @@ import { createApp } from "../index";
 import { Database } from "../../db";
 import { isValidStellarAddress } from "../routes/profiles";
 
+// Well-formed Stellar public keys. Follows and the posts author filter are now
+// validated as wallet addresses (issue #665), so these fixtures are real keys
+// rather than the placeholder strings earlier revisions used.
+const FOLLOW_ADDRESS = "GAZJ2EQV2ES6R5BLUNXMNFR5VN3HQF4KXJ2GM5Q7GQHT5XBC2CRX3GK3";
+const OTHER_ADDRESS = "GBZX4364PEPQTDICMIQDZ56K4T75QZCR4NBEYKO6PDRJAHZKGUOJPCXB";
+
 function makeMockDb(): jest.Mocked<Database> {
   return {
     upsertProfile: jest.fn().mockResolvedValue(undefined),
@@ -218,8 +224,10 @@ describe("API Routes", () => {
     it("filters by author", async () => {
       db.listPosts.mockResolvedValueOnce({ posts: [], total: 0 });
 
-      await request(app).get("/api/posts?author=GABC123");
-      expect(db.listPosts).toHaveBeenCalledWith(expect.objectContaining({ author: "GABC123" }));
+      await request(app).get(`/api/posts?author=${FOLLOW_ADDRESS}`);
+      expect(db.listPosts).toHaveBeenCalledWith(
+        expect.objectContaining({ author: FOLLOW_ADDRESS })
+      );
     });
 
     it("returns 400 for invalid limit", async () => {
@@ -286,10 +294,10 @@ describe("API Routes", () => {
     it("returns followers list", async () => {
       db.getFollowers.mockResolvedValueOnce({ followers: ["GUSER1", "GUSER2"], total: 2 });
 
-      const res = await request(app).get("/api/follows/GABC123/followers");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/followers`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
-        address: "GABC123",
+        address: FOLLOW_ADDRESS,
         total: 2,
         followers: ["GUSER1", "GUSER2"],
       });
@@ -298,7 +306,7 @@ describe("API Routes", () => {
     it("returns empty list when no followers", async () => {
       db.getFollowers.mockResolvedValueOnce({ followers: [], total: 0 });
 
-      const res = await request(app).get("/api/follows/GALONE/followers");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/followers`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ followers: [], total: 0, has_more: false });
     });
@@ -313,15 +321,15 @@ describe("API Routes", () => {
     it("returns following list", async () => {
       db.getFollowing.mockResolvedValueOnce({ following: ["GUSER3"], total: 1 });
 
-      const res = await request(app).get("/api/follows/GABC123/following");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/following`);
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ address: "GABC123", total: 1, following: ["GUSER3"] });
+      expect(res.body).toMatchObject({ address: FOLLOW_ADDRESS, total: 1, following: ["GUSER3"] });
     });
 
     it("returns empty list when not following anyone", async () => {
       db.getFollowing.mockResolvedValueOnce({ following: [], total: 0 });
 
-      const res = await request(app).get("/api/follows/GALONE/following");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/following`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ following: [], total: 0, has_more: false });
     });
@@ -652,7 +660,7 @@ describe("API Routes", () => {
     it("GET /api/posts with author filter returns consistent empty shape", async () => {
       db.listPosts.mockResolvedValueOnce({ posts: [], total: 0 });
 
-      const res = await request(app).get("/api/posts?author=GNONEXISTENT");
+      const res = await request(app).get(`/api/posts?author=${OTHER_ADDRESS}`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
         posts: [],
@@ -664,10 +672,10 @@ describe("API Routes", () => {
     it("GET /api/follows/:address/followers returns consistent shape when no followers", async () => {
       db.getFollowers.mockResolvedValueOnce({ followers: [], total: 0 });
 
-      const res = await request(app).get("/api/follows/GALONE/followers");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/followers`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
-        address: "GALONE",
+        address: FOLLOW_ADDRESS,
         followers: [],
         total: 0,
         has_more: false,
@@ -677,7 +685,7 @@ describe("API Routes", () => {
     it("GET /api/follows/:address/followers returns empty with has_more=false when offset beyond total", async () => {
       db.getFollowers.mockResolvedValueOnce({ followers: [], total: 3 });
 
-      const res = await request(app).get("/api/follows/GABC123/followers?offset=100");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/followers?offset=100`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
         followers: [],
@@ -689,10 +697,10 @@ describe("API Routes", () => {
     it("GET /api/follows/:address/following returns consistent shape when not following anyone", async () => {
       db.getFollowing.mockResolvedValueOnce({ following: [], total: 0 });
 
-      const res = await request(app).get("/api/follows/GALONE/following");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/following`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
-        address: "GALONE",
+        address: FOLLOW_ADDRESS,
         following: [],
         total: 0,
         has_more: false,
@@ -702,7 +710,7 @@ describe("API Routes", () => {
     it("GET /api/follows/:address/following returns empty with has_more=false when offset beyond total", async () => {
       db.getFollowing.mockResolvedValueOnce({ following: [], total: 2 });
 
-      const res = await request(app).get("/api/follows/GABC123/following?offset=50");
+      const res = await request(app).get(`/api/follows/${FOLLOW_ADDRESS}/following?offset=50`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
         following: [],
