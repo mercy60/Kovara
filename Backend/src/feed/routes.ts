@@ -10,6 +10,7 @@ import {
   rankFeed,
   validateFeedMode,
 } from "./ranking";
+import { parseOptionalStellarAddress, sendValidationError } from "../api/validation";
 
 /**
  * How many recent candidates the route pulls before ranking.
@@ -45,7 +46,15 @@ export function createFeedRouter(db: Database): Router {
       const mode = validateFeedMode(req.query.mode);
       const limit = parseFeedLimit(req.query.limit);
       const offset = parseFeedOffset(req.query.offset);
-      const author = req.query.author ? String(req.query.author) : undefined;
+
+      // `author` scopes the feed to one wallet, so it is validated as a Stellar
+      // address rather than coerced with String() (issue #665).
+      const authorResult = parseOptionalStellarAddress(req.query.author, "author");
+      if (!authorResult.ok) {
+        sendValidationError(res, authorResult.issue);
+        return;
+      }
+      const author = authorResult.value;
 
       // Over-fetch: rank over a bounded window, then page within it.
       const { posts } = await db.listPosts({

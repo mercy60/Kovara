@@ -2,10 +2,19 @@ import { Router, Request, Response } from "express";
 import { Database, Post } from "../../db";
 import { ApiErrorResponse, PostListResponse, PostResponse } from "../contracts";
 import { serializeBigInt } from "../index";
+import {
+  DEFAULT_LIMIT,
+  DEFAULT_OFFSET,
+  MAX_LIMIT,
+  parseLimit,
+  parseNumericId,
+  parseOffset,
+  parseOptionalStellarAddress,
+  sendValidationError,
+  validate,
+} from "../validation";
 
-const MAX_LIMIT = 100;
-const DEFAULT_LIMIT = 20;
-const DEFAULT_OFFSET = 0;
+const parseListLimit = parseLimit(MAX_LIMIT, DEFAULT_LIMIT);
 
 /**
  * Serialize a Post record to its API representation.
@@ -50,33 +59,29 @@ export function createPostsRouter(db: Database): Router {
   router.get(
     "/",
     async (req: Request, res: Response<PostListResponse | ApiErrorResponse>): Promise<void> => {
-      const author = typeof req.query.author === "string" ? req.query.author : undefined;
-
-      const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : DEFAULT_LIMIT;
-      const rawOffset = req.query.offset !== undefined ? Number(req.query.offset) : DEFAULT_OFFSET;
-
-      if (!Number.isInteger(rawLimit) || rawLimit < 1) {
-        res.status(400).json({ error: "limit must be a positive integer", code: "INVALID_QUERY" });
-        return;
-      }
-      if (rawLimit > MAX_LIMIT) {
-        res.status(400).json({ error: `limit cannot exceed ${MAX_LIMIT}`, code: "LIMIT_EXCEEDED" });
-        return;
-      }
-      if (!Number.isInteger(rawOffset) || rawOffset < 0) {
-        res
-          .status(400)
-          .json({ error: "offset must be a non-negative integer", code: "INVALID_QUERY" });
+      const parsed = validate<{ author?: string; limit: number; offset: number }>(
+        {
+          // `author` is a wallet address, so it is validated as one rather than
+          // passed through as an arbitrary string filter (issue #665).
+          author: { parse: parseOptionalStellarAddress, required: false },
+          limit: { parse: parseListLimit, required: false, default: DEFAULT_LIMIT },
+          offset: { parse: parseOffset, required: false, default: DEFAULT_OFFSET },
+        },
+        { author: req.query.author, limit: req.query.limit, offset: req.query.offset }
+      );
+      if (!parsed.ok) {
+        sendValidationError(res, parsed.issue);
         return;
       }
 
-      const { posts, total } = await db.listPosts({ author, limit: rawLimit, offset: rawOffset });
+      const { author, limit, offset } = parsed.value;
+      const { posts, total } = await db.listPosts({ author, limit, offset });
       res.json({
         posts: posts.map(serializePost),
         total,
-        limit: rawLimit,
-        offset: rawOffset,
-        has_more: rawOffset + posts.length < total,
+        limit,
+        offset,
+        has_more: offset + posts.length < total,
       } as unknown as PostListResponse);
     }
   );
@@ -88,18 +93,13 @@ export function createPostsRouter(db: Database): Router {
   router.get(
     "/:id",
     async (req: Request, res: Response<PostResponse | ApiErrorResponse>): Promise<void> => {
-      const rawId = req.params.id;
-
-      let postId: bigint;
-      try {
-        postId = BigInt(rawId);
-        if (postId < BigInt(0)) throw new Error();
-      } catch {
-        res.status(400).json({ error: "id must be a non-negative integer", code: "INVALID_ID" });
+      const parsed = parseNumericId(req.params.id);
+      if (!parsed.ok) {
+        sendValidationError(res, parsed.issue);
         return;
       }
 
-      const post = await db.getPost(postId);
+      const post = await db.getPost(parsed.value);
       if (!post) {
         res.status(404).json({ error: "Post not found", code: "NOT_FOUND" });
         return;

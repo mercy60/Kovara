@@ -56,13 +56,46 @@ header or `Authorization: Bearer`; when unset they are open.
 
 All data endpoints are mounted under `/api/v1` (and the legacy `/api`).
 
+### Request validation (issue #665)
+
+Every public endpoint validates its inputs in one shared module
+(`src/api/validation.ts`) before any handler or database call runs, so a
+malformed request is refused at the edge rather than reaching business logic.
+The result is a uniform contract:
+
+- Every validation failure returns **exactly** `{ "error": string, "code": string }`
+  with status `400` — the same `ApiErrorResponse` envelope used by the rest of
+  the API. No endpoint invents its own shape or code.
+- **Wallet addresses are security-sensitive.** An address must be a Stellar
+  public key: `G` followed by 55 characters from the base-32 alphabet
+  `A–Z`, `2–7`. The digits `0`, `1`, `8`, `9` are rejected (they never appear in
+  a real strkey).
+- **Identifiers** (`/posts/:id`, submission ids) are parsed as `bigint`, so an id
+  above `Number.MAX_SAFE_INTEGER` is never silently rounded.
+- **Bounded numeric fields** have explicit ceilings: `limit` is a positive
+  integer with a per-endpoint maximum (`LIMIT_EXCEEDED` above it), and `offset`
+  is a non-negative integer.
+- **Cursors** are opaque, but bounded to 128 characters; a longer or non-string
+  cursor is `INVALID_CURSOR`.
+- The **`x-stellar-address` identity header** is rejected when well-formedness
+  fails, rather than being silently ignored by the rate limiter and falling back
+  to IP-based accounting.
+
+| Code | Meaning |
+| --- | --- |
+| `400 INVALID_ADDRESS` | Address missing/blank, or not a base-32 `G…` Stellar public key (`x-stellar-address` included) |
+| `400 INVALID_QUERY` | Malformed `limit`/`offset` or other query parameter |
+| `400 LIMIT_EXCEEDED` | `limit` above the endpoint's maximum |
+| `400 INVALID_ID` | Non-numeric or negative resource id |
+| `400 INVALID_CURSOR` | Non-string or oversized pagination cursor |
+
 ### Profiles
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/v1/profiles/:address` | Returns the profile object. |
 
-- `400 INVALID_ADDRESS` — address missing/blank, or not a 56-character `G…` Stellar address.
+- `400 INVALID_ADDRESS` — address missing/blank, or not a base-32 `G…` Stellar public key (see [Request validation](#request-validation-issue-665)).
 - `404 NOT_FOUND` — no profile for that address.
 
 ### Posts
@@ -79,7 +112,7 @@ List response:
 ```
 
 Errors: `400 INVALID_QUERY` (bad limit/offset), `400 LIMIT_EXCEEDED`,
-`400 INVALID_ID`, `404 NOT_FOUND`.
+`400 INVALID_ADDRESS` (malformed `author`), `400 INVALID_ID`, `404 NOT_FOUND`.
 
 ### Search
 
@@ -119,7 +152,8 @@ Response (followers shown; `following` is identical with a different key):
 ```
 
 When `cursor` is supplied the keyset path is used and `next_offset`/`prev_offset`
-are `null`. Errors: `400 INVALID_QUERY`, `400 LIMIT_EXCEEDED`.
+are `null`. Errors: `400 INVALID_QUERY`, `400 LIMIT_EXCEEDED`,
+`400 INVALID_ADDRESS` (malformed `:address`), `400 INVALID_CURSOR`.
 
 ### Pools (experimental — gated)
 
@@ -198,7 +232,7 @@ Global handler / 404 catch-all (shared envelope):
 | --- | --- | --- |
 | 400 | `MALFORMED_JSON` | `express.json()` syntax error |
 | 400 | `INVALID_QUERY` / `LIMIT_EXCEEDED` / `QUERY_TOO_LONG` | Route parameter validation |
-| 400 | `INVALID_ADDRESS` / `INVALID_ID` | Route parameter validation |
+| 400 | `INVALID_ADDRESS` / `INVALID_ID` / `INVALID_CURSOR` | Route parameter validation (issue #665) |
 | 401 | `UNAUTHORIZED` | Debug token mismatch |
 | 404 | `NOT_FOUND` | Route-level or 404 catch-all |
 | 422 | `INVALID_THRESHOLD` | Pool threshold validation |
